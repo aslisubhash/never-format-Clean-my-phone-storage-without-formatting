@@ -1,0 +1,28 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node
+node_modules/
+desktop/dist/
+desktop/src-tauri/target/
+
+# Flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins-dependencies
+mobile/.packages
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.never-format-data/
+never-format-data/
+
+# Env / secrets
+.env
+.env.*
+*.pem

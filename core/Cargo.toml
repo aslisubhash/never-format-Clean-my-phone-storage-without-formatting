@@ -1,0 +1,22 @@
+[package]
+name = "never-format-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Never Format core: device, backup, verify, cleanup — safety-first"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+rusqlite = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+walkdir = { workspace = true }
+directories = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

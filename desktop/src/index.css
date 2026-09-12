@@ -1,0 +1,31 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --font-display: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --color-ink: #0f1c14;
+  --color-paper: #f3f6f1;
+  --color-mist: #e2ebe3;
+  --color-pine: #1f6b4a;
+  --color-pine-dark: #144832;
+  --color-leaf: #3d9b6c;
+  --color-amber: #c47b1a;
+  --color-coral: #c44b3a;
+  --color-slate: #5a6b60;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-ink);
+  background:
+    radial-gradient(ellipse 80% 50% at 10% -10%, #d8eadc 0%, transparent 55%),
+    radial-gradient(ellipse 60% 40% at 100% 0%, #e8f0e4 0%, transparent 50%),
+    linear-gradient(180deg, #f7faf6 0%, #eef3ec 100%);
+}
