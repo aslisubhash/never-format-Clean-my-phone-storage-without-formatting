@@ -26,3 +26,9 @@ never-format-data/
 .env
 .env.*
 *.pem
+
+# Product / planning docs (local only — not published)
+prd.md
+**/prd.md
+*.plan.md
+.cursor/
