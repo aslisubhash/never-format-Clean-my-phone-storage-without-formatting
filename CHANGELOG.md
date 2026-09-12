@@ -9,3 +9,4 @@
 - WhatsApp backup discovery with latest protection
 - Companion allowlist protocol (Android + iOS capability sets)
 - Offline-first SQLite operation history and reports
+- CI: Windows NSIS installer + Android release APK artifacts (and tagged GitHub Releases)

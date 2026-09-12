@@ -31,6 +31,24 @@ PLAN → VALIDATE → BACKUP IF REQUIRED → VERIFY → USER CONFIRMATION → DE
 - Flutter (for companion)
 - Android platform-tools (`adb`) for real devices
 
+### Download prebuilt binaries (CI)
+
+GitHub Actions builds:
+
+- **Windows installer** (NSIS `.exe`) — artifact `never-format-windows`
+- **Android companion APK** — artifact `never-format-android-apk`
+
+After a push to `main` (or a manual **Release builds** workflow run), open:
+
+**Actions → Release builds → (latest run) → Artifacts**
+
+Tag a version to publish a GitHub Release with the same files attached:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
 ### Desktop
 
 ```bash
@@ -40,6 +58,15 @@ npm run tauri dev
 ```
 
 Without a phone connected, a **mock device** appears in debug builds so you can exercise the full UI.
+
+On Windows, local installer build:
+
+```bash
+cd desktop
+npm ci
+npm run tauri build
+# → desktop/src-tauri/target/release/bundle/nsis/
+```
 
 ### Core tests
 
@@ -53,7 +80,8 @@ cargo test -p never-format-core
 cd mobile
 flutter pub get
 flutter test
-flutter run   # Android or iOS device/simulator
+flutter build apk --release
+# → mobile/build/app/outputs/flutter-apk/app-release.apk
 ```
 
 ## Platform scope
