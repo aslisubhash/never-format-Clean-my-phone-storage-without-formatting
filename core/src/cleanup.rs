@@ -9,6 +9,14 @@ use chrono::Utc;
 pub struct CleanupManager;
 
 impl CleanupManager {
+    /// Mark a dry-run plan complete without touching any device transport.
+    pub fn mark_dry_run_complete(op: &mut Operation) {
+        op.dry_run = true;
+        op.state = OpState::Completed;
+        op.message = "Dry-run only — no deletions performed".into();
+        op.updated_at = Utc::now();
+    }
+
     /// Build a dry-run or executable plan. Never includes Protected/Unknown.
     pub fn plan(device_id: &str, files: &[ScannedFile], dry_run: bool) -> Operation {
         let items: Vec<OperationItem> = files

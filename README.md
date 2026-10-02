@@ -159,8 +159,8 @@ Open **Dashboard** → **Analyze storage**. You’ll see:
 ```bash
 cd desktop
 npm install
-npm run tauri dev          # development (mock device if no phone)
-npm run tauri build        # Windows installer → src-tauri/target/release/bundle/nsis/
+npm run tauri dev          # debug: mock device if no phone
+npm run tauri build        # release: real ADB only; installer → src-tauri/target/release/bundle/nsis/
 ```
 
 ### Companion APK

@@ -28,7 +28,19 @@ export function DashboardPage() {
       )}
 
       {!selected && (
-        <p className="text-slate">Connect a phone via USB, or use the mock device in development.</p>
+        <p className="text-slate">
+          Connect a phone via USB with USB debugging enabled. Install Android platform-tools so{" "}
+          <code className="text-ink">adb</code> is on your PATH.
+          {import.meta.env.DEV && (
+            <> Debug builds also show a Mock Galaxy device when no phone is connected.</>
+          )}
+        </p>
+      )}
+
+      {selected?.transport === "mock" && (
+        <div className="rounded-md border border-amber/40 bg-amber/10 px-4 py-3 text-sm text-ink">
+          Dev mock device — not a real phone. Connect USB debugging for live storage.
+        </div>
       )}
 
       {selected && (

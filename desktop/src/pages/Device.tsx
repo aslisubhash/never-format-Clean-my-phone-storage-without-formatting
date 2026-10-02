@@ -22,7 +22,8 @@ export function DevicePage() {
       <div className="rounded-md border border-pine/20 bg-mist/50 px-4 py-3 text-sm text-slate">
         <strong className="text-ink">USB debugging required</strong> for full Android analysis.
         Never Format does not upload files. Enable Developer options → USB debugging, then
-        reconnect.
+        reconnect. Install Android platform-tools so <code className="text-ink">adb</code> is on
+        PATH.
       </div>
 
       <ul className="space-y-3">
@@ -36,7 +37,14 @@ export function DevicePage() {
                   : "border-pine/15 hover:border-pine/40"
               }`}
             >
-              <div className="font-medium">{d.name}</div>
+              <div className="flex items-center gap-2">
+                <div className="font-medium">{d.name}</div>
+                {d.transport === "mock" && (
+                  <span className="rounded bg-amber/20 px-2 py-0.5 text-xs text-ink">
+                    Dev mock
+                  </span>
+                )}
+              </div>
               <div className="mt-1 text-sm text-slate">
                 {d.platform} · {d.transport} · {d.serial}
               </div>
@@ -54,7 +62,13 @@ export function DevicePage() {
             </button>
           </li>
         ))}
-        {!devices.length && <li className="text-slate">No devices found.</li>}
+        {!devices.length && (
+          <li className="text-slate">
+            No Android device found. Enable USB debugging, accept the RSA prompt on the phone, and
+            ensure <code className="text-ink">adb devices</code> shows state{" "}
+            <code className="text-ink">device</code>.
+          </li>
+        )}
       </ul>
     </div>
   );

@@ -20,4 +20,7 @@ cd mobile && flutter test
 
 ## Mock device
 
-Debug desktop builds include a mock Android device when no ADB device is present.
+Debug builds (`cfg!(debug_assertions)`) include a Mock Galaxy Android device when no real ADB
+device is present. Release builds never inject the mock — connect a phone with USB debugging.
+
+Real devices are scanned recursively via `adb shell find <root> -type f` (see `docs/adb/README.md`).

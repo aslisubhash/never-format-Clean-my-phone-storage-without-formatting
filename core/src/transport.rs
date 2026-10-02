@@ -55,11 +55,121 @@ impl AdbTransport {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
+    /// Like `run`, but keeps stdout when the process fails with partial results
+    /// (common for `find` hitting permission-denied directories).
+    fn run_soft(&self, args: &[&str]) -> Result<String> {
+        let output = Command::new(&self.adb_path)
+            .args(args)
+            .output()
+            .map_err(|e| Error::AdbUnavailable(e.to_string()))?;
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        if output.status.success() || !stdout.trim().is_empty() {
+            return Ok(stdout);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        Err(Error::Transport(stderr))
+    }
+
     fn run_device(&self, serial: &str, args: &[&str]) -> Result<String> {
         let mut full = vec!["-s", serial];
         full.extend_from_slice(args);
         self.run(&full)
     }
+
+    fn run_device_soft(&self, serial: &str, args: &[&str]) -> Result<String> {
+        let mut full = vec!["-s", serial];
+        full.extend_from_slice(args);
+        self.run_soft(&full)
+    }
+
+    fn assert_safe_remote_path(remote_path: &str) -> Result<()> {
+        if remote_path.contains('`')
+            || remote_path.contains('$')
+            || remote_path.contains('|')
+            || remote_path.contains(';')
+            || remote_path.contains('\n')
+            || remote_path.contains('\0')
+        {
+            return Err(Error::Rejected("invalid remote path".into()));
+        }
+        Ok(())
+    }
+
+    fn max_files_for_root(remote_path: &str) -> usize {
+        if remote_path.contains("/Android/data") {
+            MAX_FILES_ANDROID_DATA
+        } else {
+            MAX_FILES_PER_ROOT
+        }
+    }
+}
+
+/// Cap recursive listings so huge trees stay usable.
+const MAX_FILES_PER_ROOT: usize = 20_000;
+const MAX_FILES_ANDROID_DATA: usize = 8_000;
+
+/// Parse `find -exec stat -c '%s\t%n'` lines into scanned files.
+pub fn parse_find_stat_listing(output: &str, limit: usize) -> Vec<ScannedFile> {
+    let mut files = Vec::new();
+    for line in output.lines() {
+        if files.len() >= limit {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((size_str, path)) = line.split_once('\t') else {
+            continue;
+        };
+        let path = path.trim();
+        if path.is_empty() || path.ends_with('/') {
+            continue;
+        }
+        let size_bytes = size_str.trim().parse::<u64>().unwrap_or(0);
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        let category = crate::classifier::classify_path(path);
+        let safety = crate::classifier::safety_for(&category, path);
+        files.push(ScannedFile {
+            path: path.to_string(),
+            name,
+            size_bytes,
+            category,
+            safety,
+            modified_at: None,
+        });
+    }
+    files
+}
+
+/// Parse plain `find -type f` paths (size filled later or left 0).
+pub fn parse_find_paths(output: &str, limit: usize) -> Vec<ScannedFile> {
+    let mut files = Vec::new();
+    for line in output.lines() {
+        if files.len() >= limit {
+            break;
+        }
+        let path = line.trim();
+        if path.is_empty() || path.ends_with('/') {
+            continue;
+        }
+        // Skip find error noise like "Permission denied"
+        if !path.starts_with('/') {
+            continue;
+        }
+        let name = path.rsplit('/').next().unwrap_or(path).to_string();
+        let category = crate::classifier::classify_path(path);
+        let safety = crate::classifier::safety_for(&category, path);
+        files.push(ScannedFile {
+            path: path.to_string(),
+            name,
+            size_bytes: 0,
+            category,
+            safety,
+            modified_at: None,
+        });
+    }
+    files
 }
 
 impl DeviceTransport for AdbTransport {
@@ -129,43 +239,39 @@ impl DeviceTransport for AdbTransport {
     }
 
     fn list_files(&self, device_id: &str, remote_path: &str) -> Result<Vec<ScannedFile>> {
-        // Use ls -l; avoid shell metacharacters by validating path
-        if remote_path.contains('`') || remote_path.contains('$') || remote_path.contains('|') {
-            return Err(Error::Rejected("invalid remote path".into()));
+        Self::assert_safe_remote_path(remote_path)?;
+        let limit = Self::max_files_for_root(remote_path);
+
+        // Prefer recursive find + stat so nested media (e.g. DCIM/Camera) is visible.
+        // Discrete argv only — path was validated above.
+        let with_sizes = self.run_device_soft(
+            device_id,
+            &[
+                "shell",
+                "find",
+                remote_path,
+                "-type",
+                "f",
+                "-exec",
+                "stat",
+                "-c",
+                "%s\t%n",
+                "{}",
+                ";",
+            ],
+        );
+
+        if let Ok(out) = with_sizes {
+            let files = parse_find_stat_listing(&out, limit);
+            if !files.is_empty() {
+                return Ok(files);
+            }
         }
-        let out = self.run_device(device_id, &["shell", "ls", "-la", remote_path])?;
-        let mut files = Vec::new();
-        for line in out.lines() {
-            let cols: Vec<&str> = line.split_whitespace().collect();
-            if cols.len() < 8 {
-                continue;
-            }
-            // permissions links owner group size date time name
-            let size: u64 = cols[4].parse().unwrap_or(0);
-            let name = cols[7..].join(" ");
-            if name == "." || name == ".." || name.is_empty() {
-                continue;
-            }
-            if cols[0].starts_with('d') {
-                continue;
-            }
-            let path = format!(
-                "{}/{}",
-                remote_path.trim_end_matches('/'),
-                name
-            );
-            let category = crate::classifier::classify_path(&path);
-            let safety = crate::classifier::safety_for(&category, &path);
-            files.push(ScannedFile {
-                path,
-                name,
-                size_bytes: size,
-                category,
-                safety,
-                modified_at: None,
-            });
-        }
-        Ok(files)
+
+        // Fallback: paths only (size 0) when stat -exec is unavailable.
+        let paths_only =
+            self.run_device_soft(device_id, &["shell", "find", remote_path, "-type", "f"])?;
+        Ok(parse_find_paths(&paths_only, limit))
     }
 
     fn pull_file(&self, device_id: &str, remote: &str, local: &Path) -> Result<()> {

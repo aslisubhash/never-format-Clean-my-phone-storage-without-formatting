@@ -17,9 +17,15 @@ struct Inner {
     last_files: Vec<ScannedFile>,
     last_summary: Option<StorageSummary>,
     backup_dest: PathBuf,
+    /// In-progress verified move awaiting user confirmation (copy already done).
+    pending_move: Option<Operation>,
 }
 
 struct AppHandle(Mutex<Inner>);
+
+fn device_manager() -> DeviceManager {
+    DeviceManager::default()
+}
 
 #[derive(Serialize)]
 struct AppInfo {
@@ -41,10 +47,7 @@ fn app_info() -> AppInfo {
 
 #[tauri::command]
 fn list_devices(app: State<AppHandle>) -> Result<Vec<DeviceInfo>, String> {
-    let mgr = DeviceManager {
-        include_mock: true,
-    };
-    let devices = mgr.discover().map_err(|e| e.to_string())?;
+    let devices = device_manager().discover().map_err(|e| e.to_string())?;
     let inner = app.0.lock().map_err(|e| e.to_string())?;
     let db = inner.state.db.lock().map_err(|e| e.to_string())?;
     for d in &devices {
@@ -61,11 +64,7 @@ fn list_devices(app: State<AppHandle>) -> Result<Vec<DeviceInfo>, String> {
 
 #[tauri::command]
 fn scan_device(app: State<AppHandle>, device_id: String) -> Result<StorageSummary, String> {
-    let devices = DeviceManager {
-        include_mock: true,
-    }
-    .discover()
-    .map_err(|e| e.to_string())?;
+    let devices = device_manager().discover().map_err(|e| e.to_string())?;
     let device = devices
         .into_iter()
         .find(|d| d.id == device_id)
@@ -120,11 +119,7 @@ fn run_backup(
     paths: Vec<String>,
     dry_run: bool,
 ) -> Result<Operation, String> {
-    let devices = DeviceManager {
-        include_mock: true,
-    }
-    .discover()
-    .map_err(|e| e.to_string())?;
+    let devices = device_manager().discover().map_err(|e| e.to_string())?;
     let device = devices
         .into_iter()
         .find(|d| d.id == device_id)
@@ -134,6 +129,12 @@ fn run_backup(
     let inner = app.0.lock().map_err(|e| e.to_string())?;
     let dest_root = BackupManager::backup_root(&inner.backup_dest, &device.name);
     let mut op = BackupManager::plan(&device_id, &paths, &dest_root, dry_run);
+    // Prefer scan metadata sizes for the free-space gate.
+    for item in &mut op.items {
+        if let Some(f) = inner.last_files.iter().find(|f| f.path == item.source_path) {
+            item.size_bytes = f.size_bytes;
+        }
+    }
     BackupManager::execute(transport.as_ref(), &device_id, &mut op).map_err(|e| e.to_string())?;
 
     let report = reports::from_operation(&op);
@@ -152,23 +153,50 @@ fn run_move(
     paths: Vec<String>,
     confirmed: bool,
 ) -> Result<Operation, String> {
-    let devices = DeviceManager {
-        include_mock: true,
-    }
-    .discover()
-    .map_err(|e| e.to_string())?;
+    let devices = device_manager().discover().map_err(|e| e.to_string())?;
     let device = devices
         .into_iter()
         .find(|d| d.id == device_id)
         .ok_or_else(|| "device not found".to_string())?;
     let transport = DeviceManager::transport_for(&device).map_err(|e| e.to_string())?;
 
-    let inner = app.0.lock().map_err(|e| e.to_string())?;
-    let dest_root = BackupManager::backup_root(&inner.backup_dest, &device.name);
-    let mut op = BackupManager::plan(&device_id, &paths, &dest_root, false);
-    op.kind = OpKind::Move;
+    let mut inner = app.0.lock().map_err(|e| e.to_string())?;
+
+    let mut op = if confirmed {
+        // Resume cached copy/verify — do not re-plan (that would wipe hashes and re-copy).
+        let pending = inner.pending_move.take().ok_or_else(|| {
+            "no pending move to confirm — run Copy & verify first".to_string()
+        })?;
+        if pending.device_id != device_id {
+            return Err("pending move is for a different device".into());
+        }
+        if pending.state != OpState::AwaitingConfirmation {
+            return Err(format!(
+                "pending move is not awaiting confirmation (state={:?})",
+                pending.state
+            ));
+        }
+        pending
+    } else {
+        let dest_root = BackupManager::backup_root(&inner.backup_dest, &device.name);
+        let mut planned = BackupManager::plan(&device_id, &paths, &dest_root, false);
+        planned.kind = OpKind::Move;
+        for item in &mut planned.items {
+            if let Some(f) = inner.last_files.iter().find(|f| f.path == item.source_path) {
+                item.size_bytes = f.size_bytes;
+            }
+        }
+        planned
+    };
+
     MoveManager::execute(transport.as_ref(), &device_id, &mut op, confirmed)
         .map_err(|e| e.to_string())?;
+
+    if op.state == OpState::AwaitingConfirmation {
+        inner.pending_move = Some(op.clone());
+    } else {
+        inner.pending_move = None;
+    }
 
     let report = reports::from_operation(&op);
     {
@@ -184,29 +212,8 @@ fn plan_cleanup(app: State<AppHandle>, device_id: String, dry_run: bool) -> Resu
     let inner = app.0.lock().map_err(|e| e.to_string())?;
     let mut op = CleanupManager::plan(&device_id, &inner.last_files, dry_run);
     if dry_run {
-        CleanupManager::execute(
-            DeviceManager::transport_for(&DeviceInfo {
-                id: device_id.clone(),
-                name: String::new(),
-                model: String::new(),
-                serial: String::new(),
-                platform: PlatformKind::Android,
-                transport: "mock".into(),
-                total_bytes: 0,
-                used_bytes: 0,
-                free_bytes: 0,
-                adb_available: false,
-                mtp_available: false,
-                companion_connected: false,
-                capabilities: vec![],
-            })
-            .map_err(|e| e.to_string())?
-            .as_ref(),
-            &device_id,
-            &mut op,
-            false,
-        )
-        .map_err(|e| e.to_string())?;
+        // Dry-run completes without touching any transport.
+        CleanupManager::mark_dry_run_complete(&mut op);
     }
     Ok(op)
 }
@@ -217,11 +224,7 @@ fn run_cleanup(
     device_id: String,
     confirmed: bool,
 ) -> Result<Operation, String> {
-    let devices = DeviceManager {
-        include_mock: true,
-    }
-    .discover()
-    .map_err(|e| e.to_string())?;
+    let devices = device_manager().discover().map_err(|e| e.to_string())?;
     let device = devices
         .into_iter()
         .find(|d| d.id == device_id)
@@ -249,11 +252,7 @@ fn run_cleanup(
 
 #[tauri::command]
 fn list_whatsapp(device_id: String) -> Result<Vec<WhatsAppBackupInfo>, String> {
-    let devices = DeviceManager {
-        include_mock: true,
-    }
-    .discover()
-    .map_err(|e| e.to_string())?;
+    let devices = device_manager().discover().map_err(|e| e.to_string())?;
     let device = devices
         .into_iter()
         .find(|d| d.id == device_id)
@@ -305,6 +304,7 @@ pub fn run() {
             last_files: Vec::new(),
             last_summary: None,
             backup_dest,
+            pending_move: None,
         })))
         .invoke_handler(tauri::generate_handler![
             app_info,
